@@ -44,7 +44,7 @@ clam:
   instance_weight: 0.3
 
 train:
-  seed: 42          # set to null to disable model-init seeding (fold splits stay reproducible)
+  seed: null          # set to null to disable model-init seeding (fold splits stay reproducible)
   lr: 0.00015
   weight_decay: 0.00001
   epochs: 60
