@@ -1,0 +1,5 @@
+# After: pip install -r requirements.txt
+# Request access: https://huggingface.co/MahmoodLab/CONCH
+# export HF_TOKEN=...   # or huggingface-cli login
+-r requirements.txt
+git+https://github.com/Mahmoodlab/CONCH.git

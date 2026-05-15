@@ -1,0 +1,47 @@
+# Same as baseline.yaml but max-pooling MIL lower bound (proposal Table).
+# Copy other keys from baseline.yaml if you fork this file.
+
+slides_dir: data/slides
+labels_json: data/output_valid.json
+features_dir: data/features
+results_dir: results_maxpool
+
+num_classes: 3
+class_names: ["class_1", "class_2", "class_3"]
+
+patch:
+  level: 0
+  size: 256
+  stride: 256
+  max_patches_per_slide: 8000
+
+tissue:
+  hsv_s_min: 0.05
+  hsv_v_min: 0.08
+  max_background_frac: 0.9
+
+encoder:
+  name: resnet50
+  weights: IMAGENET1K_V2
+  hf_token: null
+  checkpoint_path: null
+  conch_checkpoint: null
+  batch_size: 64
+
+mil:
+  model: maxpool
+  hidden_dim: 256
+  attention_hidden: 128
+  dropout: 0.25
+
+train:
+  seed: 42
+  lr: 0.00015
+  weight_decay: 0.00001
+  epochs: 60
+  patience: 30
+  val_frac: 0.15
+
+cv:
+  n_splits: 5
+  shuffle: true

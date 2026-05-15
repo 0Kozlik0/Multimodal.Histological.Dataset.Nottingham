@@ -1,0 +1,58 @@
+# Workflow (from repository root, after `python -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt`):
+#   export PYTHONPATH=src
+#   # ResNet (default): extract then train with the same config.
+#   python -m mil_baseline.cli extract --config configs/baseline.yaml
+#   python -m mil_baseline.cli train-cv --config configs/baseline.yaml
+#   # UNI / UNI2-h (timm + HF): request access on Hugging Face, then e.g. `export HF_TOKEN=...`
+#   python -m mil_baseline.cli extract --config configs/extract_uni2.yaml
+#   python -m mil_baseline.cli train-cv --config configs/extract_uni2.yaml
+#   # CONCH: pip install -r requirements-conch.txt ; then use configs/extract_conch.yaml
+# Install OpenSlide system library for .mrxs (e.g. macOS: brew install openslide).
+# Paths below are relative to the repository root.
+slides_dir: data/slides
+labels_json: data/output_valid.json
+features_dir: data/features
+results_dir: results
+
+# Labels in JSON are 1..C; set C here for 3-class setup
+num_classes: 3
+class_names: ["class_1", "class_2", "class_3"]
+
+patch:
+  # Read patches at this OpenSlide level (0 = highest resolution). Tune per scanner.
+  level: 0
+  size: 256
+  stride: 256
+  max_patches_per_slide: 8000
+
+tissue:
+  hsv_s_min: 0.05
+  hsv_v_min: 0.08
+  max_background_frac: 0.9
+
+encoder:
+  # resnet50 | uni | uni2_h | conch  (gated HF weights: set HF_TOKEN or encoder.hf_token)
+  name: resnet50
+  weights: IMAGENET1K_V2
+  hf_token: null
+  checkpoint_path: null
+  conch_checkpoint: null
+  batch_size: 64
+
+mil:
+  model: abmil
+  hidden_dim: 256
+  attention_hidden: 128
+  dropout: 0.25
+
+train:
+  seed: 42
+  lr: 0.00015
+  weight_decay: 0.00001
+  epochs: 60
+  patience: 30
+  val_frac: 0.15
+
+cv:
+  n_splits: 5
+  shuffle: true

@@ -1,0 +1,64 @@
+# Prepared manifest (labeled slides under .mnt/nfs-data/{2023,2024,2025}).
+# Run prepare_mil_dataset.py first; then extract features and train.
+slides_dir: .mnt/nfs-data
+labels_json: data/prepared_mil_dataset/labels_prepared.json
+features_dir: data/features_prepared
+results_dir: results_prepared
+
+num_classes: 3
+# Nottingham grades 1–3 (mapped to 0-indexed labels 0–2 internally)
+class_names:
+  - "Grade 1"
+  - "Grade 2"
+  - "Grade 3"
+
+patch:
+  level: 0
+  size: 256
+  stride: 256
+  max_patches_per_slide: 8000
+
+tissue:
+  hsv_s_min: 0.05
+  hsv_v_min: 0.08
+  max_background_frac: 0.9
+
+encoder:
+  name: resnet50
+  weights: IMAGENET1K_V2
+  hf_token: null
+  checkpoint_path: null
+  conch_checkpoint: null
+  batch_size: 64
+
+mil:
+  model: abmil          # abmil | clam_sb | maxpool
+  hidden_dim: 256
+  attention_hidden: 128
+  dropout: 0.25
+  k_sample: 8           # CLAM-SB only: top-k / bottom-k patches for instance supervision
+
+# CLAM-SB instance-supervision weight (bag_loss + clam.instance_weight * inst_loss)
+clam:
+  k_sample: 8
+  instance_weight: 0.3
+
+train:
+  seed: 42          # set to null to disable model-init seeding (fold splits stay reproducible)
+  lr: 0.00015
+  weight_decay: 0.00001
+  epochs: 60
+  patience: 30
+  val_frac: 0.15
+
+cv:
+  n_splits: 5          # target folds; auto-falls back to 3 or GroupKFold if stratification fails
+  shuffle: true
+
+# Weights & Biases configuration
+# Set WANDB_MODE=disabled to skip logging entirely without changing this file.
+wandb:
+  project: nottingham-mil-benchmark
+  entity: null          # override via WANDB_ENTITY env var or wandb login
+  group: null           # auto-generated as {encoder}_{model}_{timestamp} when null
+  mode: null            # null = respect WANDB_MODE env var; "disabled" to force-off

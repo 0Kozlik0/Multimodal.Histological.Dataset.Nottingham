@@ -1,0 +1,43 @@
+# UNI v1 (ViT-L/16) — https://huggingface.co/MahmoodLab/uni
+slides_dir: data/slides
+labels_json: data/output_valid.json
+features_dir: data/features_uni
+results_dir: results_uni
+
+num_classes: 3
+class_names: ["class_1", "class_2", "class_3"]
+
+patch:
+  level: 0
+  size: 256
+  stride: 256
+  max_patches_per_slide: 8000
+
+tissue:
+  hsv_s_min: 0.05
+  hsv_v_min: 0.08
+  max_background_frac: 0.9
+
+encoder:
+  name: uni
+  hf_token: null
+  checkpoint_path: null
+  batch_size: 48
+
+mil:
+  model: abmil
+  hidden_dim: 256
+  attention_hidden: 128
+  dropout: 0.25
+
+train:
+  seed: 42
+  lr: 0.00015
+  weight_decay: 0.00001
+  epochs: 60
+  patience: 30
+  val_frac: 0.15
+
+cv:
+  n_splits: 5
+  shuffle: true

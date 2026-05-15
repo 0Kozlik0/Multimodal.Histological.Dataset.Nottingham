@@ -1,0 +1,3 @@
+[console_scripts]
+mil-extract = mil_baseline.cli:main_extract
+mil-train-cv = mil_baseline.cli:main_train_cv

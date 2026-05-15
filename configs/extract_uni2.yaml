@@ -1,0 +1,44 @@
+# UNI2-h (ViT-H/14) via timm + Hugging Face — request access: https://huggingface.co/MahmoodLab/UNI2-h
+# Auth: export HF_TOKEN=...  or set encoder.hf_token (not recommended for shared repos)
+slides_dir: data/slides
+labels_json: data/output_valid.json
+features_dir: data/features_uni2_h
+results_dir: results_uni2_h
+
+num_classes: 3
+class_names: ["class_1", "class_2", "class_3"]
+
+patch:
+  level: 0
+  size: 256
+  stride: 256
+  max_patches_per_slide: 8000
+
+tissue:
+  hsv_s_min: 0.05
+  hsv_v_min: 0.08
+  max_background_frac: 0.9
+
+encoder:
+  name: uni2_h
+  hf_token: null
+  checkpoint_path: null
+  batch_size: 32
+
+mil:
+  model: abmil
+  hidden_dim: 256
+  attention_hidden: 128
+  dropout: 0.25
+
+train:
+  seed: 42
+  lr: 0.00015
+  weight_decay: 0.00001
+  epochs: 60
+  patience: 30
+  val_frac: 0.15
+
+cv:
+  n_splits: 5
+  shuffle: true
