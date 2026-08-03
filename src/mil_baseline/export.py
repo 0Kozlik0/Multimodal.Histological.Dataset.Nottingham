@@ -1,17 +1,4 @@
-"""Publication-ready artifact export for the Nottingham MIL benchmark.
-
-Reads per-fold ``test_predictions.pt`` and ``cv_summary.json`` from a results
-directory and writes a self-contained ``publication_outputs/<run_id>/`` folder
-containing:
-
-- PDF/SVG confusion matrices (per fold + aggregated)
-- ROC one-vs-rest curves (PDF)
-- Main results table (CSV + booktabs LaTeX)
-- Per-fold metrics table (CSV)
-- Slide-level predictions (CSV)
-- ``results_summary.json``
-- ``README.md`` with caption stubs and regenerate command
-"""
+"""Export CV results to a publication_outputs bundle (figures, CSV, LaTeX)."""
 
 from __future__ import annotations
 
@@ -24,10 +11,6 @@ from typing import Any
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Journal-quality matplotlib defaults
-# ──────────────────────────────────────────────────────────────────────────────
 
 _JOURNAL_RC: dict = {
     "font.family": "sans-serif",
@@ -48,17 +31,12 @@ _JOURNAL_RC: dict = {
     "axes.spines.right": False,
 }
 
-# Colorblind-safe palette (IBM accessible palette)
 _CB_COLORS = ["#0072B2", "#E69F00", "#009E73", "#CC79A7", "#56B4E9", "#D55E00", "#F0E442"]
 
 
 def _setup_mpl() -> None:
     mpl.rcParams.update(_JOURNAL_RC)
 
-
-# ──────────────────────────────────────────────────────────────────────────────
-# I/O helpers
-# ──────────────────────────────────────────────────────────────────────────────
 
 def _load_cv_summary(results_dir: Path) -> dict:
     p = results_dir / "cv_summary.json"
@@ -68,31 +46,35 @@ def _load_cv_summary(results_dir: Path) -> dict:
         return json.load(f)
 
 
-def _load_fold_predictions(results_dir: Path, n_folds: int) -> list[dict]:
+def _load_fold_predictions(results_dir: Path, n_folds: int, n_seeds: int = 1) -> list[dict]:
     import torch
 
     preds = []
-    for fold in range(n_folds):
-        pt = results_dir / f"fold_{fold}" / "test_predictions.pt"
-        if not pt.exists():
-            raise FileNotFoundError(f"Missing: {pt}")
-        obj = torch.load(pt, map_location="cpu", weights_only=False)
-        preds.append(
-            {
-                "fold": fold,
-                "y_true": np.array(obj["y_true"]),
-                "y_pred": np.array(obj["y_pred"]),
-                "y_prob": np.array(obj["y_prob"]),
-                "slide_ids": obj.get("slide_ids", []),
-                "patient_ids": obj.get("patient_ids", []),
-            }
-        )
+    for seed_idx in range(n_seeds):
+        for fold in range(n_folds):
+            # n_seeds=1 keeps the original single-level structure for backward compat
+            if n_seeds > 1:
+                pt = results_dir / f"seed_{seed_idx}" / f"fold_{fold}" / "test_predictions.pt"
+            else:
+                pt = results_dir / f"fold_{fold}" / "test_predictions.pt"
+            if not pt.exists():
+                raise FileNotFoundError(f"Missing: {pt}")
+            obj = torch.load(pt, map_location="cpu", weights_only=False)
+            preds.append(
+                {
+                    "fold": fold,
+                    "seed_idx": seed_idx,
+                    "y_true": np.array(obj["y_true"]),
+                    "y_pred": np.array(obj["y_pred"]),
+                    "y_prob": np.array(obj["y_prob"]),
+                    "slide_ids": obj.get("slide_ids", []),
+                    "patient_ids": obj.get("patient_ids", []),
+                }
+            )
     return preds
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Confusion matrix plots
-# ──────────────────────────────────────────────────────────────────────────────
+
 
 def _cm_normalized(cm_counts: np.ndarray) -> np.ndarray:
     row_sums = cm_counts.sum(axis=1, keepdims=True).clip(min=1)
@@ -174,9 +156,7 @@ def _export_confusion_matrices(
     return artifacts
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# ROC / PR curves
-# ──────────────────────────────────────────────────────────────────────────────
+
 
 def _export_roc_curves(
     fold_preds: list[dict],
@@ -216,31 +196,66 @@ def _export_roc_curves(
     return [fname]
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Tables — CSV + LaTeX booktabs
-# ──────────────────────────────────────────────────────────────────────────────
+
 
 def _fmt_mean_std(mean: float, std: float, decimals: int = 3) -> str:
     return f"{mean:.{decimals}f} \\pm {std:.{decimals}f}"
+
+
+def _compute_collapse_rate(fold_preds: list[dict], n_classes: int) -> float:
+    """Fraction of folds where the model predicts fewer than n_classes distinct labels."""
+    if not fold_preds:
+        return float("nan")
+    n_collapsed = sum(1 for p in fold_preds if len(np.unique(p["y_pred"])) < n_classes)
+    return float(n_collapsed / len(fold_preds))
+
+
+def _compute_perm_p(fold_preds: list[dict]) -> float:
+    """Permutation-test p-value for macro F1 using pooled predictions across all folds."""
+    from mil_baseline.stats import permutation_test_macro_f1
+
+    y_true = np.concatenate([p["y_true"] for p in fold_preds])
+    y_pred = np.concatenate([p["y_pred"] for p in fold_preds])
+    _, p_val = permutation_test_macro_f1(y_true, y_pred)
+    return float(p_val)
 
 
 def _export_main_table(
     summary: dict,
     out_dir: Path,
     model_name: str,
+    fold_preds: list[dict] | None = None,
 ) -> list[str]:
     import csv
 
     ms = summary["cv_mean_std"]
+    n_classes = len(summary.get("class_names") or [])
+
+    # Compute collapse_rate and perm_p if fold predictions are available
+    collapse_rate: float | str = ""
+    perm_p: float | str = ""
+    if fold_preds:
+        try:
+            collapse_rate = _compute_collapse_rate(fold_preds, n_classes)
+        except Exception:
+            pass
+        try:
+            perm_p = _compute_perm_p(fold_preds)
+        except Exception:
+            pass
+
     row_data = {
         "model": model_name.upper(),
         "encoder": summary.get("encoder", ""),
+        "n_folds": summary.get("total_folds", summary.get("n_splits", "")),
         "macro_f1_mean": ms["macro_f1"]["mean"],
         "macro_f1_std": ms["macro_f1"]["std"],
         "balanced_acc_mean": ms["balanced_accuracy"]["mean"],
         "balanced_acc_std": ms["balanced_accuracy"]["std"],
         "auroc_mean": ms["macro_auc_ovr"]["mean"],
         "auroc_std": ms["macro_auc_ovr"]["std"],
+        "collapse_rate": collapse_rate,
+        "perm_p_macro_f1": perm_p,
     }
 
     csv_path = out_dir / "table_main_results.csv"
@@ -253,15 +268,20 @@ def _export_main_table(
     f1_str = _fmt_mean_std(row_data["macro_f1_mean"], row_data["macro_f1_std"])
     ba_str = _fmt_mean_std(row_data["balanced_acc_mean"], row_data["balanced_acc_std"])
     au_str = _fmt_mean_std(row_data["auroc_mean"], row_data["auroc_std"])
-    n_folds = summary.get("n_splits", "?")
+    n_folds = summary.get("total_folds", summary.get("n_splits", "?"))
+    n_seeds = summary.get("n_seeds", 1)
+    fold_desc = f"{n_folds} folds" if n_seeds <= 1 else f"{summary.get('n_splits')}×{n_seeds} seeds"
+    cr_note = f", collapse rate={collapse_rate:.0%}" if isinstance(collapse_rate, float) else ""
+    pp_note = f", perm $p$={perm_p:.3f}" if isinstance(perm_p, float) else ""
 
     tex = textwrap.dedent(
         rf"""
         % Auto-generated — do not edit; regenerate with export_publication_artifacts.py
         \begin{{table}}[ht]
           \centering
-          \caption{{Nottingham grade prediction benchmark ({n_folds}-fold patient-level CV,
-                    mean\,$\pm$\,std).}}
+          \caption{{Nottingham grade prediction benchmark ({fold_desc} patient-level CV,
+                    mean\,$\pm$\,std{cr_note}{pp_note}).
+                    AUROC is supplementary; macro F1 and balanced accuracy are primary metrics.}}
           \label{{tab:main_results}}
           \begin{{tabular}}{{llccc}}
             \toprule
@@ -338,9 +358,7 @@ def _export_predictions_csv(fold_preds: list[dict], out_dir: Path) -> str:
     return "predictions_val.csv"
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# results_summary.json
-# ──────────────────────────────────────────────────────────────────────────────
+
 
 def _export_results_summary(
     summary: dict,
@@ -370,9 +388,7 @@ def _export_results_summary(
     return "results_summary.json"
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Folder README
-# ──────────────────────────────────────────────────────────────────────────────
+
 
 def _write_folder_readme(
     out_dir: Path,
@@ -440,9 +456,7 @@ def _write_folder_readme(
     (out_dir / "README.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Main entry point
-# ──────────────────────────────────────────────────────────────────────────────
+
 
 def export_publication_artifacts(
     results_dir: Path,
@@ -454,7 +468,8 @@ def export_publication_artifacts(
 
     summary = _load_cv_summary(results_dir)
     n_folds = int(summary["n_splits"])
-    fold_preds = _load_fold_predictions(results_dir, n_folds)
+    n_seeds = int(summary.get("n_seeds", 1))
+    fold_preds = _load_fold_predictions(results_dir, n_folds, n_seeds)
     model_name: str = summary.get("mil_model", "mil")
     class_names: list[str] = summary.get("class_names") or [
         f"class_{i}" for i in range(3)
@@ -468,7 +483,7 @@ def export_publication_artifacts(
 
     artifacts += _export_confusion_matrices(fold_preds, class_names, out_dir, model_name)
     artifacts += _export_roc_curves(fold_preds, class_names, out_dir, model_name)
-    artifacts += _export_main_table(summary, out_dir, model_name)
+    artifacts += _export_main_table(summary, out_dir, model_name, fold_preds=fold_preds)
     artifacts.append(_export_per_fold_csv(summary, out_dir))
     artifacts.append(_export_predictions_csv(fold_preds, out_dir))
     artifacts.append(_export_results_summary(summary, config_path, out_dir))

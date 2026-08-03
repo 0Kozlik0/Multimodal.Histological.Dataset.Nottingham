@@ -37,6 +37,10 @@ mil:
   attention_hidden: 128
   dropout: 0.25
   k_sample: 8           # CLAM-SB only: top-k / bottom-k patches for instance supervision
+  augment:
+    gaussian_noise_std: 0.0   # feature augmentation — set >0 to enable
+    feature_dropout: 0.0
+    patch_dropout: 0.0
 
 # CLAM-SB instance-supervision weight (bag_loss + clam.instance_weight * inst_loss)
 clam:
@@ -48,11 +52,15 @@ train:
   lr: 0.00015
   weight_decay: 0.00001
   epochs: 60
-  patience: 30
+  patience: 20
   val_frac: 0.15
+  early_stop_metric: balanced_acc   # balanced_acc | macro_f1 | macro_auc — robust on tiny val sets
+  min_epochs: 10                    # warmup: early stopping only fires after this many epochs
+  label_smoothing: 0.05             # reduces overconfidence on small dataset
 
 cv:
   n_splits: 5          # target folds; auto-falls back to 3 or GroupKFold if stratification fails
+  n_seeds: 1           # repeat CV with N different fold random seeds; 1 = standard single run
   shuffle: true
 
 # Weights & Biases configuration

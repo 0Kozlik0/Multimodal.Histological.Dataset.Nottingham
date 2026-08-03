@@ -58,6 +58,35 @@ def main() -> None:
         help="After CV, write publication_outputs/ (PDF confusion matrices, LaTeX tables, …).",
     )
 
+    p_lp = sub.add_parser(
+        "linear-probe",
+        help="Logistic Regression + k-NN on mean-pooled patch features (no MIL training).",
+    )
+    p_lp.add_argument("--config", type=str, default="configs/baseline.yaml")
+    p_lp.add_argument(
+        "--export-publication",
+        action="store_true",
+        help="After CV, write publication_outputs/ for linear probe results.",
+    )
+
+    p_mx = sub.add_parser(
+        "mitosis-extract",
+        help="Build the mitosis ROI manifest and extract+encode patch embeddings.",
+    )
+    p_mx.add_argument("--config", type=str, default="configs/mitosis_roi.yaml")
+    p_mx.add_argument("--overwrite", action="store_true")
+
+    p_mt = sub.add_parser(
+        "mitosis-train-cv",
+        help="Slide-grouped CV for the mitotic-figure ROI/patch classifier.",
+    )
+    p_mt.add_argument("--config", type=str, default="configs/mitosis_roi.yaml")
+    p_mt.add_argument(
+        "--export-publication",
+        action="store_true",
+        help="After CV, write publication_outputs/ for the mitosis ROI classifier.",
+    )
+
     args = ap.parse_args()
     cfg = _cfg_path(args.config)
     if args.cmd == "extract":
@@ -65,6 +94,22 @@ def main() -> None:
     elif args.cmd == "train-cv":
         export = getattr(args, "export_publication", False)
         out = run_train_cv(cfg, export_publication=export)
+        print(f"Wrote {out}")
+    elif args.cmd == "linear-probe":
+        from mil_baseline.linear_probe import run_linear_probe
+
+        export = getattr(args, "export_publication", False)
+        out = run_linear_probe(cfg, export_publication=export)
+        print(f"Wrote {out}")
+    elif args.cmd == "mitosis-extract":
+        from mil_baseline.mitosis_roi import run_mitosis_extract
+
+        run_mitosis_extract(cfg, overwrite=args.overwrite)
+    elif args.cmd == "mitosis-train-cv":
+        from mil_baseline.mitosis_roi import run_mitosis_cv
+
+        export = getattr(args, "export_publication", False)
+        out = run_mitosis_cv(cfg, export_publication=export)
         print(f"Wrote {out}")
 
 

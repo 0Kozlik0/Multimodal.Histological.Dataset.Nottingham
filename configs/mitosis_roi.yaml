@@ -1,0 +1,35 @@
+# Mitotic-figure ROI classification (structure-level technical validation).
+# Annotations: data/annotations/mitosis_kmk/ from extract_mitosis_annotations.py
+
+slides_dir: .mnt/nfs-data
+annotations_dir: data/annotations/mitosis_kmk
+manifest_path: data/mitosis_roi/roi_manifest.csv
+features_dir: data/mitosis_roi/features
+results_dir: results_mitosis_roi
+
+class_names:
+  - "non_mitotic"
+  - "mitotic"
+
+sampling:
+  neg_per_pos: 3
+  min_sep_px: 128
+  seed: 42
+
+patch:
+  level: 0
+  size: 128
+
+encoder:
+  name: resnet50
+  weights: IMAGENET1K_V2
+  hf_token: null
+  checkpoint_path: null
+  conch_checkpoint: null
+  batch_size: 64
+
+train:
+  seed: 42
+
+cv:
+  n_splits: 5

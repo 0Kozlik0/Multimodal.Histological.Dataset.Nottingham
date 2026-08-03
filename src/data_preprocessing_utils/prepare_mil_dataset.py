@@ -71,12 +71,7 @@ def _resolve_slide_candidates(
 def _glob_fallback(
     image_name: str, slides_root: Path, allowed_years: list[str]
 ) -> list[Path]:
-    """Recursively search year subdirs for stem matches.
-
-    Handles non-standard layouts where slides are nested deeper than
-    ``<year>/<slide>`` (e.g. ``2025/2025_01/DS_A01R_01S.mrxs``).
-    Returns relative paths from ``slides_root``.
-    """
+    """Recursively search year subdirs for stem matches."""
     stem = Path(image_name).stem
     hits: list[Path] = []
     for year in allowed_years:
@@ -109,7 +104,6 @@ def _resolve_records(
                 existing.append(rel)
 
         # Fallback: recursive glob handles sub-subfolder layouts
-        # (e.g. 2025/2025_01/slide.mrxs) missed by the fixed candidate list.
         if not existing:
             existing = _glob_fallback(rec.image, slides_root, allowed_years)
 

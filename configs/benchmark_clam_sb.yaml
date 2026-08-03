@@ -36,6 +36,10 @@ mil:
   attention_hidden: 128
   dropout: 0.25
   k_sample: 8
+  augment:
+    gaussian_noise_std: 0.0
+    feature_dropout: 0.0
+    patch_dropout: 0.0
 
 clam:
   k_sample: 8
@@ -46,11 +50,15 @@ train:
   lr: 0.00015
   weight_decay: 0.00001
   epochs: 60
-  patience: 30
+  patience: 20
   val_frac: 0.15
+  early_stop_metric: balanced_acc   # balanced_acc | macro_f1 | macro_auc — robust on tiny val sets
+  min_epochs: 10                    # warmup: early stopping only fires after this many epochs
+  label_smoothing: 0.05             # reduces overconfidence on small dataset
 
 cv:
   n_splits: 5
+  n_seeds: 1
   shuffle: true
 
 wandb:

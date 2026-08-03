@@ -73,12 +73,95 @@ class MaxPoolMIL(nn.Module):
         return logits, None
 
 
+class MeanLinearMIL(nn.Module):
+    """Smallest possible MIL: mean-pool patches → LayerNorm → linear classifier.
+
+    Args:
+        use_layernorm: Apply (non-affine) LayerNorm to the pooled vector.
+            Mirrors the StandardScaler step in the LogisticRegression linear-probe
+            baseline; without it, ResNet50 features have varying per-dim scales
+            that a single linear layer can't compensate for in one fold of 27 slides.
+    """
+
+    def __init__(
+        self,
+        input_dim: int,
+        num_classes: int,
+        dropout: float = 0.0,
+        use_layernorm: bool = True,
+    ):
+        super().__init__()
+        self.norm = (
+            nn.LayerNorm(input_dim, elementwise_affine=False)
+            if use_layernorm else nn.Identity()
+        )
+        self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
+        self.head = nn.Linear(input_dim, num_classes)
+
+    def forward(self, feats: torch.Tensor) -> tuple[torch.Tensor, None]:
+        pooled = feats.mean(dim=0)
+        pooled = self.norm(pooled)
+        pooled = self.dropout(pooled)
+        return self.head(pooled), None
+
+
+class MeanLinearOrdinalMIL(nn.Module):
+    """MeanLinear with CORAL ordinal output (Niu et al. 2016)."""
+
+    def __init__(
+        self,
+        input_dim: int,
+        num_classes: int,
+        dropout: float = 0.0,
+    ):
+        super().__init__()
+        self.n_classes = num_classes
+        self.norm     = nn.LayerNorm(input_dim, elementwise_affine=False)
+        self.dropout  = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
+        self.weight   = nn.Linear(input_dim, 1, bias=False)
+        # K-1 ordered biases, initialised in increasing order so cumulative probs decrease
+        self.biases   = nn.Parameter(torch.linspace(-1.0, 1.0, num_classes - 1))
+
+    def forward(self, feats: torch.Tensor) -> tuple[torch.Tensor, None]:
+        pooled = self.norm(feats.mean(dim=0))
+        pooled = self.dropout(pooled)
+        z = self.weight(pooled)                # scalar
+        cum = torch.sigmoid(z + self.biases)   # (K-1,) — P(y > k)
+        # Convert cumulative to per-class probabilities
+        eps = 1e-7
+        ones = torch.ones(1, device=cum.device)
+        p_geq = torch.cat([ones, cum])         # P(y >= k): ones for k=0
+        p_gt  = torch.cat([cum, torch.zeros(1, device=cum.device)])  # P(y > k): 0 for last
+        probs = (p_geq - p_gt).clamp(min=eps)  # (K,)
+        logits = probs.log()
+        return logits, None
+
+
+class MeanMaxLinearMIL(nn.Module):
+    """Concatenate mean + max pooling on patch features, then linear classifier."""
+
+    def __init__(
+        self,
+        input_dim: int,
+        num_classes: int,
+        dropout: float = 0.0,
+    ):
+        super().__init__()
+        self.norm_mean = nn.LayerNorm(input_dim, elementwise_affine=False)
+        self.norm_max  = nn.LayerNorm(input_dim, elementwise_affine=False)
+        self.dropout   = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
+        self.head      = nn.Linear(input_dim * 2, num_classes)
+
+    def forward(self, feats: torch.Tensor) -> tuple[torch.Tensor, None]:
+        pooled_mean = self.norm_mean(feats.mean(dim=0))
+        pooled_max  = self.norm_max(feats.max(dim=0).values)
+        pooled      = torch.cat([pooled_mean, pooled_max], dim=-1)
+        pooled      = self.dropout(pooled)
+        return self.head(pooled), None
+
+
 class CLAM_SB(nn.Module):
     """CLAM single-branch (Lu et al., 2021): gated attention + optional instance supervision.
-
-    Bag-level CE loss + instance-level binary supervision on top-k (positive) and
-    bottom-k (negative) attention-ranked patches.  Instance supervision is skipped
-    when ``k_sample == 0`` or the bag has too few patches.
 
     Reference: https://github.com/mahmoodlab/CLAM
     """
@@ -124,12 +207,7 @@ class CLAM_SB(nn.Module):
     def instance_loss(
         self, h: torch.Tensor, attn: torch.Tensor, label: int
     ) -> torch.Tensor:
-        """Instance-level supervision: binary CE on top-k (pos) and bottom-k (neg) patches.
-
-        ``h`` must be the projected representation (output of ``self.inst``), already
-        computed during the forward pass — do not re-run self.inst to avoid a second
-        stochastic dropout draw.
-        """
+        """Instance-level supervision: binary CE on top-k (pos) and bottom-k (neg) patches."""
         k = min(self.k_sample, h.shape[0] // 2)
         if k < 1:
             return torch.tensor(0.0, device=h.device)
@@ -154,7 +232,13 @@ def build_mil(name: str, input_dim: int, num_classes: int, mil_cfg: dict) -> nn.
         return ABMIL(input_dim, num_classes, hidden, attn_h, drop)
     if name == "maxpool":
         return MaxPoolMIL(input_dim, num_classes, hidden, drop)
+    if name in ("mean_linear", "mean"):
+        return MeanLinearMIL(input_dim, num_classes, drop)
+    if name in ("meanmax_linear", "meanmax"):
+        return MeanMaxLinearMIL(input_dim, num_classes, drop)
+    if name in ("mean_ordinal", "ordinal"):
+        return MeanLinearOrdinalMIL(input_dim, num_classes, drop)
     if name == "clam_sb":
         k = int(mil_cfg.get("k_sample", 8))
         return CLAM_SB(input_dim, num_classes, hidden, attn_h, drop, k)
-    raise ValueError(f"Unknown MIL model '{name}' — choose abmil, clam_sb, or maxpool")
+    raise ValueError(f"Unknown MIL model '{name}' — choose abmil, clam_sb, maxpool, or mean_linear")

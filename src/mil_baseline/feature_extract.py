@@ -33,7 +33,8 @@ def extract_slide_features(
         locs = collect_patch_locations(slide, level, ps, st, tissue_cfg)
     if len(locs) == 0:
         raise RuntimeError(f"No patches passed tissue filter for {slide_path}")
-    rng = np.random.default_rng(int(cfg.get("train", {}).get("seed", 42)))
+    _rng_seed = cfg.get("train", {}).get("seed")
+    rng = np.random.default_rng(int(_rng_seed) if _rng_seed is not None else 42)
     if len(locs) > max_n:
         idx = rng.choice(len(locs), size=max_n, replace=False)
         locs = [locs[i] for i in sorted(idx.tolist())]
@@ -82,7 +83,9 @@ def run_extract(config_path: Path, overwrite: bool = False) -> None:
     slides_dir = resolve_path(root, cfg["slides_dir"])
     labels_path = resolve_path(root, cfg["labels_json"])
     feats_dir = resolve_path(root, cfg["features_dir"])
-    seed_everything(int(cfg["train"]["seed"]))
+    _seed = cfg.get("train", {}).get("seed")
+    if _seed is not None:
+        seed_everything(int(_seed))
 
     df = load_labels_json(labels_path, slides_dir, int(cfg["num_classes"]))
     df = require_existing_slides(df)

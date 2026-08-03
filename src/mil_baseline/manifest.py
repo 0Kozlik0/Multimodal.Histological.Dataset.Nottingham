@@ -19,13 +19,7 @@ class SlideRecord:
 
 
 def load_labels_json(path: Path, slides_dir: Path, num_classes: int) -> pd.DataFrame:
-    """Load labels JSON into a DataFrame.
-
-    Expects records with keys ``image`` and ``label`` (1-indexed).  If a
-    ``patient_id`` key is present it is used for patient-level CV; otherwise
-    ``slide_id`` is used as the patient identity (one-slide-per-patient
-    assumption) and a warning is emitted.
-    """
+    """Load labels JSON into a DataFrame."""
     with open(path, "r", encoding="utf-8") as f:
         rows = json.load(f)
     out: list[dict] = []

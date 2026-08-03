@@ -8,6 +8,7 @@ from typing import Any
 
 import numpy as np
 import torch
+import random
 from sklearn.model_selection import GroupShuffleSplit, StratifiedGroupKFold
 
 from mil_baseline.manifest import load_labels_json, require_existing_slides
@@ -27,12 +28,7 @@ def _make_patient_folds(
     n_splits: int,
     seed: int,
 ) -> tuple[list[tuple[np.ndarray, np.ndarray]], int]:
-    """Build outer CV folds respecting patient disjointness.
-
-    Tries StratifiedGroupKFold(n_splits) first; falls back to 3-fold if that
-    fails (too few samples per class), then to unstratified GroupKFold.
-    Returns (folds, actual_n_splits).
-    """
+    """Build outer CV folds respecting patient disjointness."""
     from sklearn.model_selection import GroupKFold
 
     idx = np.arange(len(slide_ids))
@@ -81,8 +77,29 @@ def _inner_patient_split(
     """Split train slides into fit / early-stopping-val keeping patients disjoint."""
     idx = np.arange(len(slide_ids))
     groups = np.array(patient_ids)
-    gss = GroupShuffleSplit(n_splits=1, test_size=val_frac, random_state=seed)
-    tr_idx, va_idx = next(gss.split(idx, np.array(ys), groups=groups))
+    ys_arr = np.array(ys)
+    n_classes = len(set(ys))
+
+    tr_idx = va_idx = None
+    inner_k = max(3, min(10, round(1.0 / max(val_frac, 0.05))))
+    try:
+        sgkf = StratifiedGroupKFold(n_splits=inner_k, shuffle=True, random_state=seed)
+        for _tr, _va in sgkf.split(idx, ys_arr, groups=groups):
+            # Accept only if val has at least one slide of each class
+            if len(set(ys_arr[_va].tolist())) >= min(n_classes, 2):
+                tr_idx, va_idx = _tr, _va
+                break
+        if tr_idx is None:
+            # No stratified fold contained ≥2 classes in val — fall back
+            raise ValueError("no stratified inner fold has multi-class val")
+    except Exception:
+        warnings.warn(
+            "Stratified inner split failed; falling back to GroupShuffleSplit.",
+            stacklevel=2,
+        )
+        gss = GroupShuffleSplit(n_splits=1, test_size=val_frac, random_state=seed)
+        tr_idx, va_idx = next(gss.split(idx, ys_arr, groups=groups))
+
     fit_ids = [slide_ids[i] for i in tr_idx]
     fit_pids = [patient_ids[i] for i in tr_idx]
     fit_ys = [ys[i] for i in tr_idx]
@@ -95,6 +112,38 @@ def _inner_patient_split(
 # ---------------------------------------------------------------------------
 # Main CV entry point
 # ---------------------------------------------------------------------------
+
+def _compute_seed_ensemble_metrics(
+    results_dir: Path,
+    n_splits: int,
+    n_seeds: int,
+) -> dict | None:
+    """Average per-slide softmax probabilities across seeds, then compute metrics."""
+    try:
+        slide_probs: dict[str, list[np.ndarray]] = {}
+        slide_true: dict[str, int] = {}
+        for seed_idx in range(n_seeds):
+            for fold in range(n_splits):
+                pt = results_dir / f"seed_{seed_idx}" / f"fold_{fold}" / "test_predictions.pt"
+                if not pt.exists():
+                    return None
+                obj = torch.load(pt, map_location="cpu", weights_only=False)
+                sids = obj.get("slide_ids", [])
+                y_true = np.asarray(obj["y_true"])
+                y_prob = np.asarray(obj["y_prob"])
+                for i, sid in enumerate(sids):
+                    slide_probs.setdefault(sid, []).append(y_prob[i])
+                    slide_true[sid] = int(y_true[i])
+        if not slide_probs:
+            return None
+        sids_sorted = sorted(slide_probs.keys())
+        y_true_ens = np.array([slide_true[s] for s in sids_sorted], dtype=np.int64)
+        y_prob_ens = np.vstack([np.mean(np.vstack(slide_probs[s]), axis=0) for s in sids_sorted])
+        y_pred_ens = y_prob_ens.argmax(axis=1)
+        return compute_metrics(y_true_ens, y_pred_ens, y_prob_ens)
+    except Exception:
+        return None
+
 
 def _audit_leakage(
     fit_ids: list[str],
@@ -144,7 +193,6 @@ def run_train_cv(config_path: Path, export_publication: bool = False) -> Path:
     seed_everything(seed)
 
     df = load_labels_json(labels_path, slides_dir, int(cfg["num_classes"]))
-    df = require_existing_slides(df)
 
     missing_feats = [
         row["slide_id"]
@@ -152,12 +200,15 @@ def run_train_cv(config_path: Path, export_publication: bool = False) -> Path:
         if not (feats_dir / f"{row['slide_id']}.pt").exists()
     ]
     if missing_feats:
+        # Features are missing — we'll need to extract them, so raw slides must exist
+        df = require_existing_slides(df)
         raise FileNotFoundError(
             "Feature files missing. Run: python -m mil_baseline.cli extract --config ...\n"
             "Missing: "
             + ", ".join(missing_feats[:8])
             + (" ..." if len(missing_feats) > 8 else "")
         )
+    # All features cached → raw .mrxs files are not required for training
 
     slide_ids = df["slide_id"].tolist()
     patient_ids = df["patient_id"].tolist()
@@ -167,10 +218,8 @@ def run_train_cv(config_path: Path, export_publication: bool = False) -> Path:
     ]
 
     n_splits = int(cfg["cv"]["n_splits"])
-    fold_seed = seed if seed is not None else 42  # reproducible fold splits even when model init is unseeded
-    folds, actual_n_splits = _make_patient_folds(slide_ids, patient_ids, ys, n_splits, fold_seed)
-    if actual_n_splits != n_splits:
-        print(f"[CV] Using {actual_n_splits}-fold CV (requested {n_splits}).")
+    n_seeds  = int(cfg["cv"].get("n_seeds", 1))   # outer-seed repetitions (default 1 = unchanged)
+    base_fold_seed = seed if seed is not None else random.randint(0, 1000000)
 
     # wandb group name: ties all fold runs together in the UI
     wandb_cfg: dict = cfg.get("wandb") or {}
@@ -180,90 +229,107 @@ def run_train_cv(config_path: Path, export_publication: bool = False) -> Path:
     group_name: str = wandb_cfg.get("group") or f"{encoder_name}_{mil_name}_{ts}"
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    fold_rows: list[dict] = []
-    pooled_true: list[int] = []
-    pooled_prob: list[np.ndarray] = []
-
     val_frac = float(cfg["train"]["val_frac"])
 
-    for fold, (tr_idx, te_idx) in enumerate(folds):
-        fold_dir = results_dir / f"fold_{fold}"
+    all_fold_rows: list[dict] = []
+    all_pooled_true: list[int] = []
+    all_pooled_prob: list[np.ndarray] = []
+    actual_n_splits: int = n_splits  # updated on first seed
 
-        tr_slide_ids = [slide_ids[i] for i in tr_idx]
-        tr_patient_ids = [patient_ids[i] for i in tr_idx]
-        tr_ys = [ys[i] for i in tr_idx]
-        te_ids = [slide_ids[i] for i in te_idx]
-        te_pids = [patient_ids[i] for i in te_idx]
-        te_ys = [ys[i] for i in te_idx]
-
-        inner_seed = fold_seed + fold
-        fit_ids, fit_pids, fit_ys, va_ids, va_pids, va_ys = _inner_patient_split(
-            tr_slide_ids, tr_patient_ids, tr_ys, val_frac, inner_seed
+    for seed_idx in range(n_seeds):
+        fold_seed = base_fold_seed + seed_idx
+        folds, actual_n_splits = _make_patient_folds(
+            slide_ids, patient_ids, ys, n_splits, fold_seed
         )
+        if actual_n_splits != n_splits:
+            print(f"[CV] Using {actual_n_splits}-fold CV (requested {n_splits}).")
+        if n_seeds > 1:
+            print(f"\n[CV] === Seed {seed_idx + 1}/{n_seeds}  (fold_seed={fold_seed}) ===")
 
-        _audit_leakage(fit_ids, va_ids, te_ids, fit_pids, va_pids, te_pids, fold)
+        for fold, (tr_idx, te_idx) in enumerate(folds):
+            # Nest fold directories under seed_N/ when running multiple seeds
+            if n_seeds > 1:
+                fold_dir = results_dir / f"seed_{seed_idx}" / f"fold_{fold}"
+            else:
+                fold_dir = results_dir / f"fold_{fold}"
 
-        print(
-            f"[Fold {fold}/{actual_n_splits - 1}]  "
-            f"fit={len(fit_ids)} slides / {len(set(fit_pids))} patients  "
-            f"val={len(va_ids)} / {len(set(va_pids))}  "
-            f"test={len(te_ids)} / {len(set(te_pids))}"
-        )
+            tr_slide_ids = [slide_ids[i] for i in tr_idx]
+            tr_patient_ids = [patient_ids[i] for i in tr_idx]
+            tr_ys = [ys[i] for i in tr_idx]
+            te_ids = [slide_ids[i] for i in te_idx]
+            te_pids = [patient_ids[i] for i in te_idx]
+            te_ys = [ys[i] for i in te_idx]
 
-        # wandb: one run per fold
-        _wandb_init_fold(
-            wandb_cfg=wandb_cfg,
-            group_name=group_name,
-            fold=fold,
-            cfg=cfg,
-            actual_n_splits=actual_n_splits,
-            n_fit=len(fit_ids),
-            n_val=len(va_ids),
-            n_test=len(te_ids),
-            labels_path=labels_path,
-        )
-
-        try:
-            row = train_one_fold(
-                fit_ids,
-                fit_ys,
-                va_ids,
-                va_ys,
-                te_ids,
-                te_ys,
-                feats_dir,
-                cfg,
-                device,
-                fold_dir,
-                train_pids=fit_pids,
-                val_pids=va_pids,
-                test_pids=te_pids,
-                fold_idx=fold,
-                class_names=class_names,
-                n_folds=actual_n_splits,
+            inner_seed = fold_seed + fold
+            fit_ids, fit_pids, fit_ys, va_ids, va_pids, va_ys = _inner_patient_split(
+                tr_slide_ids, tr_patient_ids, tr_ys, val_frac, inner_seed
             )
-        finally:
-            _wandb_finish()
 
-        row["fold"] = fold
-        fold_rows.append(row)
+            _audit_leakage(fit_ids, va_ids, te_ids, fit_pids, va_pids, te_pids, fold)
 
-        pred = torch.load(
-            fold_dir / "test_predictions.pt", map_location="cpu", weights_only=False
-        )
-        pooled_true.extend(pred["y_true"].tolist())
-        pooled_prob.append(pred["y_prob"])
+            print(
+                f"[Fold {fold}/{actual_n_splits - 1}]  "
+                f"fit={len(fit_ids)} slides / {len(set(fit_pids))} patients  "
+                f"val={len(va_ids)} / {len(set(va_pids))}  "
+                f"test={len(te_ids)} / {len(set(te_pids))}"
+            )
+
+            fold_run_name = f"seed{seed_idx}_fold{fold}" if n_seeds > 1 else f"fold_{fold}"
+            _wandb_init_fold(
+                wandb_cfg=wandb_cfg,
+                group_name=group_name,
+                fold=fold,
+                cfg=cfg,
+                actual_n_splits=actual_n_splits,
+                n_fit=len(fit_ids),
+                n_val=len(va_ids),
+                n_test=len(te_ids),
+                labels_path=labels_path,
+                run_name=fold_run_name,
+            )
+
+            try:
+                row = train_one_fold(
+                    fit_ids,
+                    fit_ys,
+                    va_ids,
+                    va_ys,
+                    te_ids,
+                    te_ys,
+                    feats_dir,
+                    cfg,
+                    device,
+                    fold_dir,
+                    train_pids=fit_pids,
+                    val_pids=va_pids,
+                    test_pids=te_pids,
+                    fold_idx=fold,
+                    class_names=class_names,
+                    n_folds=actual_n_splits,
+                )
+            finally:
+                _wandb_finish()
+
+            row["fold"] = fold
+            row["seed_idx"] = seed_idx
+            all_fold_rows.append(row)
+
+            pred = torch.load(
+                fold_dir / "test_predictions.pt", map_location="cpu", weights_only=False
+            )
+            all_pooled_true.extend(pred["y_true"].tolist())
+            all_pooled_prob.append(pred["y_prob"])
 
     # ------------------------------------------------------------------
-    # Aggregate metrics across folds
+    # Aggregate metrics across ALL seeds × folds
     # ------------------------------------------------------------------
-    pooled_true_arr = np.array(pooled_true, dtype=np.int64)
-    pooled_prob_arr = np.vstack(pooled_prob)
+    pooled_true_arr = np.array(all_pooled_true, dtype=np.int64)
+    pooled_prob_arr = np.vstack(all_pooled_prob)
     pooled_pred_arr = pooled_prob_arr.argmax(axis=1)
     pooled_metrics = compute_metrics(pooled_true_arr, pooled_pred_arr, pooled_prob_arr)
 
     def mean_std(key: str) -> dict[str, float]:
-        vals = [fr["test"][key] for fr in fold_rows]
+        vals = [fr["test"][key] for fr in all_fold_rows]
         return {"mean": float(np.mean(vals)), "std": float(np.std(vals))}
 
     cv_mean_std = {
@@ -273,26 +339,42 @@ def run_train_cv(config_path: Path, export_publication: bool = False) -> Path:
         "weighted_f1": mean_std("weighted_f1"),
     }
 
+    total_folds = len(all_fold_rows)
     print(
-        f"\n[CV summary — {actual_n_splits}-fold patient-level]"
+        f"\n[CV summary — {actual_n_splits}-fold × {n_seeds} seed(s) = {total_folds} folds]"
         f"\n  macro F1        {cv_mean_std['macro_f1']['mean']:.3f} ± {cv_mean_std['macro_f1']['std']:.3f}"
         f"\n  balanced acc    {cv_mean_std['balanced_accuracy']['mean']:.3f} ± {cv_mean_std['balanced_accuracy']['std']:.3f}"
         f"\n  macro AUROC     {cv_mean_std['macro_auc_ovr']['mean']:.3f} ± {cv_mean_std['macro_auc_ovr']['std']:.3f}"
     )
 
+    # ── Seed-ensemble metrics (n_seeds > 1 only): average per-slide softmax across seeds ──
+    ensembled_metrics: dict | None = None
+    if n_seeds > 1:
+        ensembled_metrics = _compute_seed_ensemble_metrics(results_dir, actual_n_splits, n_seeds)
+        if ensembled_metrics is not None:
+            print(
+                f"\n[Seed-ensembled metrics (avg softmax across {n_seeds} seeds per slide)]"
+                f"\n  macro F1        {ensembled_metrics['macro_f1']:.3f}"
+                f"\n  balanced acc    {ensembled_metrics['balanced_accuracy']:.3f}"
+                f"\n  macro AUROC     {ensembled_metrics['macro_auc_ovr']:.3f}"
+            )
+
     summary: dict[str, Any] = {
         "n_slides": len(slide_ids),
         "n_patients": len(set(patient_ids)),
         "n_splits": actual_n_splits,
+        "n_seeds": n_seeds,
+        "total_folds": total_folds,
         "fold_protocol": f"{actual_n_splits}-fold patient-level StratifiedGroupKFold",
         "mil_model": mil_name,
         "encoder": encoder_name,
         "seed": seed,
         "git_sha": get_git_sha(),
         "class_names": class_names,
+        "ensembled_test_metrics": ensembled_metrics,
         "pooled_test_metrics": pooled_metrics,
         "pooled_macro_auc_ovr": float(macro_ovr_auc(pooled_true_arr, pooled_prob_arr)),
-        "per_fold": fold_rows,
+        "per_fold": all_fold_rows,
         "cv_mean_std": cv_mean_std,
     }
 
@@ -328,6 +410,7 @@ def _wandb_init_fold(
     n_val: int,
     n_test: int,
     labels_path: Path,
+    run_name: str | None = None,
 ) -> None:
     try:
         import wandb
@@ -337,7 +420,7 @@ def _wandb_init_fold(
             project=wandb_cfg.get("project", "nottingham-mil-benchmark"),
             entity=wandb_cfg.get("entity") or None,
             group=group_name,
-            name=f"fold_{fold}",
+            name=run_name or f"fold_{fold}",
             job_type="train",
             reinit=True,
             mode=mode,

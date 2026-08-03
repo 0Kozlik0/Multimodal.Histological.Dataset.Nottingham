@@ -14,6 +14,9 @@ from sklearn.metrics import (
 
 def macro_ovr_auc(y_true: np.ndarray, proba: np.ndarray) -> float:
     try:
+        # "y should be a 1d array" and must be scored on the positive-class column.
+        if proba.shape[1] == 2:
+            return float(roc_auc_score(y_true, proba[:, 1]))
         return float(roc_auc_score(y_true, proba, multi_class="ovr", average="macro"))
     except ValueError:
         return float("nan")
@@ -22,8 +25,6 @@ def macro_ovr_auc(y_true: np.ndarray, proba: np.ndarray) -> float:
 def compute_metrics(y_true: np.ndarray, y_pred: np.ndarray, proba: np.ndarray) -> dict:
     # Pass the full label set inferred from proba so metrics are well-defined even
     # when a fold's y_true or y_pred is missing one of the Nottingham grades.
-    # The "y_pred contains classes not in y_true" warning is expected and benign for
-    # small folds — suppress it here so it doesn't pollute training output.
     n_classes = proba.shape[1]
     labels = list(range(n_classes))
     with _warnings.catch_warnings():

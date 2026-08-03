@@ -66,7 +66,7 @@ def build_uni_v1(
 
     def preprocess(x_nhwc: torch.Tensor) -> torch.Tensor:
         x = x_nhwc.float() / 255.0
-        x = x.permute(0, 3, 1, 2)
+        x = x.permute(0, 3, 1, 2).to(device)
         x = torch.nn.functional.interpolate(
             x, size=(224, 224), mode="bicubic", align_corners=False
         )
@@ -116,7 +116,7 @@ def build_uni2_h(
 
     def preprocess(x_nhwc: torch.Tensor) -> torch.Tensor:
         x = x_nhwc.float() / 255.0
-        x = x.permute(0, 3, 1, 2)
+        x = x.permute(0, 3, 1, 2).to(device)
         x = torch.nn.functional.interpolate(
             x, size=(224, 224), mode="bicubic", align_corners=False
         )

@@ -1,12 +1,15 @@
-# UNI2-h (ViT-H/14) via timm + Hugging Face — request access: https://huggingface.co/MahmoodLab/UNI2-h
-# Auth: export HF_TOKEN=...  or set encoder.hf_token (not recommended for shared repos)
-slides_dir: data/slides
-labels_json: data/output_valid.json
-features_dir: data/features_uni2_h
-results_dir: results_uni2_h
+# UNI2-h (ViT-H/14) — https://huggingface.co/MahmoodLab/UNI2-h
+# Request access on Hugging Face, then: export HF_TOKEN=...
+slides_dir: .mnt/nfs-data
+labels_json: data/prepared_mil_dataset/labels_prepared.json
+features_dir: data/features_uni2h_prepared
+results_dir: results_uni2h_prepared
 
 num_classes: 3
-class_names: ["class_1", "class_2", "class_3"]
+class_names:
+  - "Grade 1"
+  - "Grade 2"
+  - "Grade 3"
 
 patch:
   level: 0
@@ -21,7 +24,7 @@ tissue:
 
 encoder:
   name: uni2_h
-  hf_token: null
+  hf_token: null         # or export HF_TOKEN env var
   checkpoint_path: null
   batch_size: 32
 
@@ -30,15 +33,34 @@ mil:
   hidden_dim: 256
   attention_hidden: 128
   dropout: 0.25
+  k_sample: 8
+  augment:
+    gaussian_noise_std: 0.0
+    feature_dropout: 0.0
+    patch_dropout: 0.0
+
+clam:
+  k_sample: 8
+  instance_weight: 0.3
 
 train:
   seed: null
   lr: 0.00015
   weight_decay: 0.00001
   epochs: 60
-  patience: 30
+  patience: 20
   val_frac: 0.15
+  early_stop_metric: balanced_acc
+  min_epochs: 10
+  label_smoothing: 0.05
 
 cv:
   n_splits: 5
+  n_seeds: 1
   shuffle: true
+
+wandb:
+  project: nottingham-mil-benchmark
+  entity: null
+  group: null
+  mode: null

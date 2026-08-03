@@ -1,0 +1,68 @@
+# MaxPool MIL lower bound — prepared manifest (ResNet50 features).
+# Reuses features from baseline_prepared.yaml (no separate extract step needed).
+slides_dir: .mnt/nfs-data
+labels_json: data/prepared_mil_dataset/labels_prepared.json
+features_dir: data/features_prepared
+results_dir: results_maxpool_prepared
+
+num_classes: 3
+class_names:
+  - "Grade 1"
+  - "Grade 2"
+  - "Grade 3"
+
+patch:
+  level: 0
+  size: 256
+  stride: 256
+  max_patches_per_slide: 8000
+
+tissue:
+  hsv_s_min: 0.05
+  hsv_v_min: 0.08
+  max_background_frac: 0.9
+
+encoder:
+  name: resnet50
+  weights: IMAGENET1K_V2
+  hf_token: null
+  checkpoint_path: null
+  conch_checkpoint: null
+  batch_size: 64
+
+mil:
+  model: maxpool
+  hidden_dim: 256
+  attention_hidden: 128
+  dropout: 0.25
+  k_sample: 8
+  augment:
+    gaussian_noise_std: 0.0
+    feature_dropout: 0.0
+    patch_dropout: 0.0
+
+clam:
+  k_sample: 8
+  instance_weight: 0.3
+
+train:
+  seed: null
+  lr: 0.00015
+  weight_decay: 0.00001
+  epochs: 60
+  patience: 20
+  val_frac: 0.15
+  early_stop_metric: balanced_acc
+  min_epochs: 10
+  label_smoothing: 0.05
+
+cv:
+  n_splits: 5
+  n_seeds: 1
+  shuffle: true
+
+wandb:
+  project: nottingham-mil-benchmark
+  entity: null
+  group: null
+  mode: null
