@@ -8,8 +8,6 @@ Code and baselines accompanying an expert-annotated **Nottingham histological gr
 | **Task**         | 3-class Nottingham grade (1 / 2 / 3) at slide level; mitotic vs non-mitotic at ROI level               |
 | **Cohort**       | 42 WSIs (Grade 1: 13, Grade 2: 19, Grade 3: 10)                                                        |
 | **Protocol**     | Frozen patch encoders + lightweight classifiers; patient/slide-grouped CV; permutation tests           |
-| **Code license** | [MIT](LICENSE)                                                                                         |
-| **Repository**   | [github.com/0Kozlik0/Custom.Dataset.Nottingham](https://github.com/0Kozlik0/Custom.Dataset.Nottingham) |
 
 
 > **Data availability.** Whole-slide images and the released label file are part of the dataset publication (repository / archive link to be filled upon acceptance). Point `slides_dir` / `--slides-root` at your local copy of the archive.
@@ -136,18 +134,6 @@ python -m mil_baseline.cli train-cv --config configs/publication_maxpool.yaml --
 python -m mil_baseline.cli linear-probe --config configs/baseline_prepared.yaml
 ```
 
-**Headline results** (frozen ResNet50, 5-fold × 3 seeds):
-
-
-| Model                 | Macro F1      | Balanced acc. | AUROC         | perm. *p* |
-| --------------------- | ------------- | ------------- | ------------- | --------- |
-| MeanLinear MIL        | 0.499 ± 0.170 | 0.544 ± 0.149 | 0.708 ± 0.151 | < 0.001   |
-| MaxPool MIL           | 0.363 ± 0.218 | 0.403 ± 0.217 | 0.566 ± 0.213 | 0.050     |
-| ABMIL                 | 0.395 ± 0.096 | 0.439 ± 0.118 | 0.673 ± 0.139 | 0.004     |
-| CLAM-SB               | 0.419 ± 0.126 | 0.453 ± 0.154 | 0.660 ± 0.143 | < 0.001   |
-| Linear probe (LogReg) | 0.533 ± 0.082 | 0.586 ± 0.090 | 0.729 ± 0.133 | —         |
-
-
 Aggregate multiple result dirs:
 
 ```bash
@@ -242,4 +228,4 @@ Please also cite the original method papers in the table above when comparing ag
 
 ## Contact
 
-Questions about the code or technical validation: **Patrik Kozlik** (`patrik.kozlik@gmail.com`).
+Questions about the code or technical validation: **...** (`...`).
