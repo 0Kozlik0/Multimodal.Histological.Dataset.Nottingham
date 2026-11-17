@@ -228,4 +228,4 @@ Please also cite the original method papers in the table above when comparing ag
 
 ## Contact
 
-Questions about the code or technical validation: **...** (`...`).
+Questions about the code or technical validation: **Patrik Kozlík** (`patrik.kozlik@gmail.com`).
